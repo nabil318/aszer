@@ -1,0 +1,262 @@
+<?php
+// Démarrer la session pour stocker les réponses de l'utilisateur
+session_start();
+
+// Connexion à la base de données SQLite
+try {
+    $db = new PDO('sqlite:QCM.db');
+    $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+} catch (PDOException $e) {
+    die("Erreur de connexion à la base de données : " . $e->getMessage());
+}
+
+// Récupérer l'ID du DP (dossier progressif)
+$id_DP = $_GET['id'] ?? null;
+
+if (!$id_DP) {
+    die("Erreur : ID du DP manquant");
+}
+
+// Récupérer les informations du DP (table DP_0)
+$sql = "SELECT * FROM DP_0 WHERE id_DP = :id_DP";
+$stmt = $db->prepare($sql);
+$stmt->bindParam(':id_DP', $id_DP);
+$stmt->execute();
+$dp_info = $stmt->fetch(PDO::FETCH_ASSOC);
+
+// Vérification si les données du DP ont été trouvées
+if (!$dp_info) {
+    die("Erreur : Dossier Progressif non trouvé.");
+}
+
+// Récupérer toutes les questions et propositions
+$questions = [];
+for ($i = 1; $i <= 7; $i++) {  // Charger de 1 à 7 pour les questions
+    $sql = "SELECT * FROM DP_" . $i . " WHERE id_DP = :id_DP";
+    $stmt = $db->prepare($sql);
+    $stmt->bindParam(':id_DP', $id_DP);
+    $stmt->execute();
+    $questions[$i] = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    // Vérification si la question existe bien
+    if (!$questions[$i]) {
+        die("Erreur : Question $i non trouvée.");
+    }
+}
+
+// Récupérer les réponses soumises par l'utilisateur
+$responses = $_POST['reponse'] ?? [];
+$validated_questions = $_SESSION['validated_questions'] ?? []; // Liste des questions validées
+$score = $_SESSION['score'] ?? 0;  // Initialiser le score à 0
+
+// Fonction pour vérifier la réponse correcte
+function check_answer($question_id, $user_response, $correct_answer)
+{
+    // Assurez-vous que $correct_answer est un tableau, même si c'est une seule réponse
+    $correct_answer = is_array($correct_answer) ? $correct_answer : explode(',', $correct_answer);
+
+    // Si la réponse est un tableau (case à cocher), nous devons comparer chaque élément
+    if (is_array($user_response)) {
+        return !array_diff($user_response, $correct_answer) && !array_diff($correct_answer, $user_response);
+    } else {
+        // Sinon, on compare la réponse unique (réponse texte ou radio)
+        return in_array($user_response, $correct_answer);
+    }
+}
+
+// Calcul du score global si le formulaire est soumis
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    foreach ($questions as $i => $question) {
+        // Si la question a été validée, nous ne la traitons plus
+        if (isset($_POST["valider[$i]"])) {
+            $correct_answer = $question['reponse_correcte']; // Réponse correcte dans la base
+            $user_response = $responses[$i] ?? null;
+
+            if ($user_response !== null && check_answer($i, $user_response, $correct_answer)) {
+                $score++;  // Augmenter le score si la réponse est correcte
+            }
+
+            // Marquer la question comme validée dans la session
+            $validated_questions[] = $i;
+            $_SESSION['validated_questions'] = $validated_questions;
+        }
+    }
+
+    // Stocker le score dans la session
+    $_SESSION['score'] = $score;
+}
+?>
+
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QCM - Dossier Progressif</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+        }
+
+        .question-div {
+            margin-bottom: 20px;
+        }
+
+        .question-title {
+            font-weight: bold;
+            margin-top: 20px;
+        }
+
+        .proposition input[type="radio"],
+        .proposition input[type="checkbox"] {
+            pointer-events: auto;
+        }
+
+        button {
+            margin-top: 10px;
+        }
+
+        .score {
+            margin-top: 20px;
+            padding: 10px;
+            font-weight: bold;
+            background-color: #f1f1f1;
+            border: 1px solid #ccc;
+        }
+
+        .bonne-reponse {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px;
+        }
+
+        .mauvaise-reponse {
+            background-color: #f44336;
+            color: white;
+            padding: 10px;
+        }
+
+        .disabled {
+            pointer-events: none;
+            opacity: 0.5;
+        }
+    </style>
+    <script>
+        // Fonction pour afficher la div suivante
+        function showNextDiv(currentDiv, nextDivId) {
+            document.getElementById(nextDivId).style.display = 'block';
+            document.getElementById(currentDiv).style.display = 'none';
+        }
+
+        // Fonction pour désactiver la div après validation
+        function disableElements(divId) {
+            const div = document.getElementById(divId);
+            const inputs = div.querySelectorAll('input');
+            const button = div.querySelector('button');
+
+            inputs.forEach(input => input.classList.add('disabled'));
+            button.classList.add('disabled');
+        }
+    </script>
+</head>
+
+<body>
+
+    <form method="POST" action="">
+        <!-- Affichage du score global -->
+        <div class="score">
+            Score global : <span id="global-score"><?php echo $_SESSION['score'] ?? 0; ?></span>
+        </div>
+
+        <!-- Div 1: DP_1 et enoncé DP_0 -->
+        <div class="question-div" id="div1">
+            <h2 class="question-title">Dossier Progressif: <?php echo htmlspecialchars($dp_info['enonce_accueil']); ?></h2>
+            <?php if ($dp_info['image_url']): ?>
+                <img src="<?php echo htmlspecialchars($dp_info['image_url']); ?>" alt="Image d'accueil" style="max-width: 500px;">
+            <?php endif; ?>
+
+            <h3 class="question-title">Question 1: <?php echo htmlspecialchars($questions[1]['enonce']); ?></h3>
+            <?php
+            $type = $questions[1]['type'];  // Type de question
+            $correct_answer = explode(',', $questions[1]['reponse_correcte']);
+            $user_response = $responses[1] ?? null;
+
+            if ($type == 'QRU') { // Question à Réponse Unique (Radio Buttons)
+                for ($j = 1; $j <= 10; $j++) {
+                    $prop = $questions[1]["prop$j"];
+                    if (!empty($prop)) {
+                        $checked = isset($responses[1]) && in_array($j, (array)$responses[1]) ? 'checked' : '';
+                        echo "<div class='proposition'>
+                                <input type='radio' name='reponse[1]' value='$j' $checked> $prop
+                              </div>";
+                    }
+                }
+            } elseif ($type == 'QRM') { // Question à Réponses Multiples (Checkbox)
+                for ($j = 1; $j <= 10; $j++) {
+                    $prop = $questions[1]["prop$j"];
+                    if (!empty($prop)) {
+                        $checked = isset($responses[1]) && in_array($j, (array)$responses[1]) ? 'checked' : '';
+                        echo "<div class='proposition'>
+                                <input type='checkbox' name='reponse[1][]' value='$j' $checked> $prop
+                              </div>";
+                    }
+                }
+            } elseif ($type == 'QM') { // Question à Réponse Texte
+                $response_value = isset($responses[1]) ? htmlspecialchars(implode(', ', (array)$responses[1])) : '';
+                echo "<div class='proposition'>
+                        <input type='text' name='reponse[1]' value='$response_value'>
+                      </div>";
+            }
+            ?>
+            <button type="submit" name="valider[1]" onclick="disableElements('div1'); showNextDiv('div1', 'div2');">Valider</button> <!-- Bouton pour valider la question 1 -->
+        </div>
+
+        <!-- Div 2 à 7: Affichage des propositions pour chaque question -->
+        <?php for ($i = 2; $i <= 7; $i++) { ?>
+            <?php if (in_array($i, $validated_questions)) continue; // Si la question est validée, on ne l'affiche pas ?>
+            <div class="question-div" id="div<?php echo $i; ?>">
+                <h3 class="question-title">Question <?php echo $i; ?>: <?php echo htmlspecialchars($questions[$i]['enonce']); ?></h3>
+                <?php
+                $type = $questions[$i]['type'];  // Type de question
+                $correct_answer = explode(',', $questions[$i]['reponse_correcte']);
+                $user_response = $responses[$i] ?? null;
+
+                if ($type == 'QRU') { // Question à Réponse Unique (Radio Buttons)
+                    for ($j = 1; $j <= 10; $j++) {
+                        $prop = $questions[$i]["prop$j"];
+                        if (!empty($prop)) {
+                            $checked = isset($responses[$i]) && in_array($j, (array)$responses[$i]) ? 'checked' : '';
+                            echo "<div class='proposition'>
+                                    <input type='radio' name='reponse[$i]' value='$j' $checked> $prop
+                                  </div>";
+                        }
+                    }
+                } elseif ($type == 'QRM') { // Question à Réponses Multiples (Checkbox)
+                    for ($j = 1; $j <= 10; $j++) {
+                        $prop = $questions[$i]["prop$j"];
+                        if (!empty($prop)) {
+                            $checked = isset($responses[$i]) && in_array($j, (array)$responses[$i]) ? 'checked' : '';
+                            echo "<div class='proposition'>
+                                    <input type='checkbox' name='reponse[$i][]' value='$j' $checked> $prop
+                                  </div>";
+                        }
+                    }
+                } elseif ($type == 'QM') { // Question à Réponse Texte
+                    $response_value = isset($responses[$i]) ? htmlspecialchars(implode(', ', (array)$responses[$i])) : '';
+                    echo "<div class='proposition'>
+                            <input type='text' name='reponse[$i]' value='$response_value'>
+                          </div>";
+                }
+                ?>
+                <button type="submit" name="valider[<?php echo $i; ?>]" onclick="disableElements('div<?php echo $i; ?>'); showNextDiv('div<?php echo $i; ?>', 'div<?php echo $i + 1; ?>');">Valider</button> <!-- Bouton pour valider chaque question -->
+            </div>
+        <?php } ?>
+
+    </form>
+
+</body>
+
+</html>
