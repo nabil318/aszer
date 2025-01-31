@@ -89,3 +89,4 @@ if (isset($_POST['specialite']) && isset($_POST['item']) && isset($_POST['repons
 } else {
     echo "<p>Il manque des informations dans le formulaire.</p>";
 }
+// ehh
